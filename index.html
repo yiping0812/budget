@@ -138,6 +138,10 @@ a.link{text-decoration:none}
 .quote-bar .txt{font-size:12px;color:var(--muted)}
 .quote-bar button{padding:8px 14px;border-radius:10px;background:var(--accent);color:var(--accent-ink);font-size:14px;white-space:nowrap}
 .quote-bar button[disabled]{opacity:.6}
+.quote-bar .bad{color:var(--gain)}
+.diag{font-size:12px;color:var(--muted);background:var(--chip);border-radius:10px;padding:8px 12px;margin:-4px 0 12px}
+.diag summary{cursor:pointer}
+.diag-row{margin-top:6px;word-break:break-all}
 </style>
 </head>
 <body>
@@ -191,7 +195,7 @@ function defaultMeta(){
     incCats:inc.map(function(n,i){return {id:'i'+i,name:n,color:PALETTE[(i+2)%PALETTE.length]}})};
 }
 
-var docs={}, S={meta:defaultMeta(),txs:[],inv:{trades:[],prices:{}},quotes:{},quotesAt:'',sheetId:''}, loaded=false;
+var docs={}, S={quotesMeta:{},meta:defaultMeta(),txs:[],inv:{trades:[],prices:{}},quotes:{},quotesAt:'',sheetId:''}, loaded=false;
 var now=new Date();
 var UI={tab:'home',period:'month',y:now.getFullYear(),m:now.getMonth()+1,invTab:'hold'};
 var store={mode:'pending',col:null,queues:{}};
@@ -200,8 +204,10 @@ function rebuild(){
   S.meta=docs.meta?Object.assign(defaultMeta(),docs.meta):defaultMeta();
   var inv=docs.inv||{};
   S.inv={trades:inv.trades||[],prices:inv.prices||{}};
-  S.quotes=(docs.quotes&&docs.quotes.items)||{};
-  S.quotesAt=(docs.quotes&&docs.quotes.updatedAt)||'';
+  var qd=docs.quotes||{};
+  S.quotes=qd.items||{};
+  S.quotesAt=qd.dataDate||qd.updatedAt||'';
+  S.quotesMeta={fetchedAt:qd.fetchedAt||'',dataDate:qd.dataDate||'',source:qd.source||'',lastAttempt:qd.lastAttempt||0,lastError:qd.lastError||null};
   S.sheetId=(docs.sheet&&docs.sheet.fileId)||'';
   var all=[];
   Object.keys(docs).forEach(function(k){if(k.indexOf('tx-')===0)all=all.concat(docs[k].items||[])});
@@ -229,7 +235,7 @@ function localMode(){
     }
   }catch(e){}
   rebuild();loaded=true;setSync('ok','資料存在這支手機');render();
-  if(S.quotesAt!==todayStr())setTimeout(refreshQuotes,400);
+  if(needAutoRefresh())setTimeout(refreshQuotes,400);
 }
 
 function upsertTx(t,oldDate){
@@ -261,7 +267,7 @@ function balances(){
 function priceFor(key,last){
   var p=S.inv.prices[key],q=S.quotes[key];
   if(p&&(!q||p.date>=q.date))return {price:p.price,label:'手動 '+mmdd(p.date)};
-  if(q)return {price:q.price,label:'更新 '+mmdd(q.date)};
+  if(q)return {price:q.price,label:'收盤 '+mmdd(q.date)};
   return {price:last,label:'最近成交價'};
 }
 function holdings(){
@@ -297,46 +303,144 @@ function catOf(t){
 }
 function accName(id){var a=S.meta.accounts.find(function(x){return x.id===id});return a?a.name:'（已刪除帳戶）'}
 
-/* ---------- stock quotes: TWSE (listed) + TPEx (OTC) open data ---------- */
-var Q={busy:false,msg:'',noCode:0};
+/* ---------- stock quotes: daily close ----------
+   Sources, tried in order (first valid one wins):
+   1) quotes.json written daily by the GitHub Action (raw.githubusercontent.com, CORS-enabled)
+   2) quotes.json on the same site (GitHub Pages)
+   3) TWSE OpenAPI STOCK_DAY_ALL directly from the browser (works only if TWSE allows CORS) */
+var Q={busy:false,msg:'',ok:null,diag:[],noCode:0};
 var TWSE_URL='https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL';
-var TPEX_URL='https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes';
-function fetchJson(url){
-  return fetch(url,{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('http '+r.status);return r.json()});
+function codeErr(code,msg){var e=new Error(msg);e.code=code;return e}
+function repoRawUrl(){
+  var m=location.hostname.match(/^([^.]+)\.github\.io$/),seg=location.pathname.split('/')[1];
+  return m&&seg?'https://raw.githubusercontent.com/'+m[1]+'/'+seg+'/main/quotes.json':'';
 }
-function fetchWithFallback(url){
-  return fetchJson(url).catch(function(){
-    return fetchJson('https://api.allorigins.win/raw?url='+encodeURIComponent(url));
+function rocToIso(d){
+  d=String(d==null?'':d).trim();
+  if(/^\d{7}$/.test(d))return (parseInt(d.slice(0,3),10)+1911)+'-'+d.slice(3,5)+'-'+d.slice(5,7);
+  if(/^\d{8}$/.test(d))return d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6,8);
+  return '';
+}
+function isoShift(days){var d=new Date();d.setDate(d.getDate()+days);return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())}
+function checkDate(d){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(d)||isNaN(new Date(d+'T00:00:00').getTime()))throw codeErr('bad_date','資料日期格式異常：'+d);
+  if(d>isoShift(1))throw codeErr('bad_date','資料日期在未來：'+d);
+  if(d<isoShift(-45))throw codeErr('bad_date','資料日期過舊：'+d);
+}
+function parsePrice(v){
+  var s=String(v==null?'':v).replace(/,/g,'').trim();
+  if(!/^\d+(\.\d+)?$/.test(s))return NaN;
+  var n=parseFloat(s);return n>0?n:NaN;
+}
+function parseTwse(rows){
+  if(!Array.isArray(rows))throw codeErr('bad_shape','回傳不是陣列');
+  if(!rows.length)throw codeErr('empty','回傳是空陣列');
+  if(!rows.some(function(r){return r&&typeof r==='object'&&('Code' in r)&&('ClosingPrice' in r)}))throw codeErr('fields_missing','找不到 Code / ClosingPrice 欄位');
+  var items={},max='';
+  rows.forEach(function(r){
+    var c=String(r&&r.Code!=null?r.Code:'').trim(),p=parsePrice(r&&r.ClosingPrice),d=rocToIso(r&&r.Date);
+    if(c&&!isNaN(p)&&d){items[c]={price:p,date:d,name:r.Name||''};if(d>max)max=d}
+  });
+  if(!Object.keys(items).length)throw codeErr('empty','沒有任何有效收盤價');
+  return {items:items,dataDate:max};
+}
+function parseSnap(j){
+  if(!j||typeof j!=='object'||!j.quotes||typeof j.quotes!=='object')throw codeErr('fields_missing','quotes.json 缺少 quotes 欄位');
+  var items={},max='';
+  Object.keys(j.quotes).forEach(function(c){
+    var q=j.quotes[c]||{},p=parsePrice(q.p),d=String(q.d||'');
+    if(!isNaN(p)&&/^\d{4}-\d{2}-\d{2}$/.test(d)){items[String(c)]={price:p,date:d,name:q.n||''};if(d>max)max=d}
+  });
+  if(!Object.keys(items).length)throw codeErr('empty','quotes.json 沒有有效價格');
+  return {items:items,dataDate:max};
+}
+function fetchJson(url,src){
+  var t0=Date.now(),d={src:src,url:url.replace(/\?t=\d+$/,'')};
+  Q.diag.push(d);
+  return fetch(url,{cache:'no-store'}).then(function(r){
+    d.status=r.status;d.ms=Date.now()-t0;
+    if(!r.ok)throw codeErr('http','HTTP '+r.status);
+    return r.text();
+  }).then(function(t){
+    d.bytes=t.length;
+    try{return JSON.parse(t)}catch(e){d.head=t.slice(0,60);throw codeErr('not_json','回傳不是 JSON')}
+  }).catch(function(e){
+    d.error=(e&&e.message)||String(e);
+    if(d.status)throw e;
+    /* no HTTP status = browser-level failure. Probe with no-cors to tell "blocked by CORS" from "unreachable". */
+    return fetch(url,{mode:'no-cors',cache:'no-store'}).then(
+      function(){d.probe='no-cors 請求有回應：伺服器可連線，但沒有允許瀏覽器讀取（缺少 CORS 標頭）'},
+      function(){d.probe='no-cors 也失敗：網路中斷、DNS 或被封鎖'}
+    ).then(function(){throw e});
   });
 }
-function pickPrices(arr,codeKeys,priceKeys,out){
-  if(!Array.isArray(arr))return;
-  arr.forEach(function(r){
-    var c='',p=NaN;
-    codeKeys.forEach(function(k){if(!c&&r[k])c=String(r[k]).trim()});
-    priceKeys.forEach(function(k){if(isNaN(p)&&r[k]!=null)p=parseFloat(String(r[k]).replace(/,/g,''))});
-    if(c&&p>0&&!(c in out))out[c]=p;
-  });
+function quoteSources(){
+  var s=[],raw=repoRawUrl(),t='?t='+Date.now();
+  if(raw)s.push({id:'github-raw',url:raw+t,kind:'snap'});
+  s.push({id:'same-site',url:'quotes.json'+t,kind:'snap'});
+  s.push({id:'twse-direct',url:TWSE_URL,kind:'twse'});
+  return s;
+}
+function heldCodes(){return holdings().rows.filter(function(o){return o.code}).map(function(o){return o.code})}
+function needAutoRefresh(){
+  if(!heldCodes().length)return false;
+  var m=S.quotesMeta||{},now=new Date();
+  if(m.lastAttempt&&Date.now()-m.lastAttempt<30*60*1000)return false;   /* don't hammer after a failure */
+  if(!m.fetchedAt)return true;
+  var f=new Date(m.fetchedAt);
+  if(f.toDateString()!==now.toDateString())return true;                 /* new day */
+  if(m.dataDate===todayStr())return false;                              /* already have today's close */
+  return f.getHours()<15&&now.getHours()>=15;                           /* fetched before close, now after close */
+}
+function fmtDate(iso){return iso?iso.replace(/-/g,'/'):''}
+function fmtStamp(iso){
+  if(!iso)return '';var d=new Date(iso);if(isNaN(d.getTime()))return '';
+  return d.getFullYear()+'/'+pad(d.getMonth()+1)+'/'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes());
 }
 function refreshQuotes(){
   if(Q.busy)return;
-  var h=holdings(),codes=h.rows.filter(function(o){return o.code}).map(function(o){return o.code});
-  Q.noCode=h.rows.length-codes.length;
-  if(!codes.length){Q.msg=h.rows.length?'持股都沒有填代號，無法更新。':'還沒有持股。';render();return}
-  Q.busy=true;Q.msg='更新中…';render();
-  var prices={};
-  var p1=fetchWithFallback(TWSE_URL).then(function(j){pickPrices(j,['Code'],['ClosingPrice'],prices)}).catch(function(){});
-  var p2=fetchWithFallback(TPEX_URL).then(function(j){pickPrices(j,['SecuritiesCompanyCode','Code'],['Close','ClosingPrice'],prices)}).catch(function(){});
-  Promise.all([p1,p2]).then(function(){
-    Q.busy=false;
-    if(!Object.keys(prices).length){Q.msg='連不到證交所資料，請稍後再試，或先手動輸入現價。';render();return}
-    var items=clone(S.quotes),n=0,miss=[];
-    codes.forEach(function(c){if(prices[c]){items[c]={price:prices[c],date:todayStr()};n++}else miss.push(c)});
-    Q.msg='已更新 '+n+' 檔最近收盤價'+(miss.length?'；查不到：'+miss.join('、'):'');
-    if(n)put('quotes',{items:items,updatedAt:todayStr()});else render();
+  var held=heldCodes();
+  Q.noCode=holdings().rows.length-held.length;
+  if(!held.length){Q.ok=false;Q.msg=Q.noCode?'持股都沒有填代號，無法更新。':'還沒有持股。';render();return}
+  Q.busy=true;Q.ok=null;Q.msg='更新中…';Q.diag=[];render();
+  var list=quoteSources(),i=0,errs=[];
+  function next(){
+    if(i>=list.length)return Promise.reject(codeErr('all_failed',errs.join('；')));
+    var s=list[i++];
+    return fetchJson(s.url,s.id).then(function(j){
+      var r=s.kind==='twse'?parseTwse(j):parseSnap(j);
+      checkDate(r.dataDate);r.src=s.id;return r;
+    }).catch(function(e){errs.push(s.id+'：'+((e&&e.message)||e));return next()});
+  }
+  next().then(function(r){
+    var items=clone(S.quotes),n=0,miss=[],older=[];
+    held.forEach(function(c){
+      var q=r.items[c];
+      if(!q){miss.push(c);return}
+      var old=items[c];
+      if(old&&old.date>q.date){older.push(c);return}                    /* never go backwards in time */
+      items[c]={price:q.price,date:q.date,name:q.name};n++;
+    });
+    var base=docs.quotes||{};
+    Q.busy=false;Q.ok=n>0;
+    Q.msg=(n?'已更新 '+n+' 檔，資料日期 '+fmtDate(r.dataDate)+'（來源：'+r.src+'）':'沒有任何持股在資料中找到')+
+      (miss.length?'；查不到：'+miss.join('、')+'，維持舊價格':'')+(older.length?'；來源資料較舊，略過：'+older.join('、'):'');
+    put('quotes',{items:items,updatedAt:n?r.dataDate:(base.updatedAt||''),dataDate:n?r.dataDate:(base.dataDate||''),
+      fetchedAt:n?new Date().toISOString():(base.fetchedAt||''),source:n?r.src:(base.source||''),lastAttempt:Date.now(),lastError:n?null:{at:new Date().toISOString(),msg:Q.msg}});
+  },function(e){
+    var base=docs.quotes||{};
+    Q.busy=false;Q.ok=false;
+    Q.msg='更新失敗，沿用舊價格。'+((e&&e.message)||'');
+    put('quotes',Object.assign({items:S.quotes},base,{lastAttempt:Date.now(),lastError:{at:new Date().toISOString(),msg:Q.msg}}));
   });
 }
-
+function diagHtml(){
+  if(!Q.diag.length)return '';
+  return '<details class="diag"'+(Q.ok===false?' open':'')+'><summary>診斷資訊</summary>'+Q.diag.map(function(d){
+    return '<div class="diag-row"><b>'+esc(d.src)+'</b> · '+(d.status?'HTTP '+d.status:'無 HTTP 狀態')+(d.ms!=null?' · '+d.ms+'ms':'')+(d.bytes?' · '+d.bytes+' bytes':'')+
+      (d.error?'<br>錯誤：'+esc(d.error):'')+(d.probe?'<br>'+esc(d.probe):'')+(d.head?'<br>開頭：'+esc(d.head):'')+'</div>';
+  }).join('')+'</details>';
+}
 function emptyBox(msg){return '<div class="empty">'+msg+'</div>'}
 function render(){
   document.querySelectorAll('#tabs button').forEach(function(b){
@@ -443,8 +547,13 @@ function viewInv(){
     '<button data-invtab="log" aria-pressed="'+(UI.invTab==='log')+'">交易紀錄</button></div>';
   if(UI.invTab==='hold'){
     html+='<section class="card"><div class="stats">'+stat('市值',money(h.value),'')+stat('未實現',signed(h.pl),h.pl>0?'pos':h.pl<0?'neg':'')+stat('已實現',signed(h.realized),h.realized>0?'pos':h.realized<0?'neg':'')+'</div></section>';
-    html+='<div class="quote-bar"><span class="txt">股價更新到：'+(S.quotesAt?esc(S.quotesAt.replace(/-/g,'/')):'尚未更新')+'<br>'+esc(Q.msg)+'</span>'+
-      '<button data-refresh="1"'+(Q.busy?' disabled':'')+'>'+(Q.busy?'更新中…':'更新股價')+'</button></div>';
+    var qm=S.quotesMeta||{},stamp=fmtStamp(qm.fetchedAt),stale=qm.dataDate&&qm.dataDate<isoShift(-4);
+    var status=Q.msg||(qm.lastError?qm.lastError.msg:'');
+    var bad=Q.ok===false||(!Q.msg&&qm.lastError);
+    html+='<div class="quote-bar"><span class="txt">資料日期：'+(qm.dataDate?esc(fmtDate(qm.dataDate)):'尚未取得')+(stale?'（可能過舊）':'')+
+      '<br>最後成功更新：'+(stamp?esc(stamp):'從未成功')+
+      (status?'<br><span class="'+(bad?'bad':'')+'">'+esc(status)+'</span>':'')+'</span>'+
+      '<button data-refresh="1"'+(Q.busy?' disabled':'')+'>'+(Q.busy?'更新中…':'更新股價')+'</button></div>'+diagHtml();
     if(Q.noCode)html+='<div class="note">有 '+Q.noCode+' 檔持股沒有填代號，無法自動更新。</div>';
     if(!h.rows.length)html+=emptyBox('尚無持倉，按右下角 + 記一筆買入');
     h.rows.sort(function(a,b){return b.value-a.value}).forEach(function(o){

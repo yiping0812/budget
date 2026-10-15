@@ -134,6 +134,10 @@ a.link{text-decoration:none}
 .set-row .x{color:var(--muted);font-size:22px}
 .hint{font-size:12px;color:var(--muted);margin:4px 0 10px}
 .note{font-size:13px;color:var(--muted);background:var(--chip);border-radius:10px;padding:10px 14px;margin-bottom:12px}
+.quote-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+.quote-bar .txt{font-size:12px;color:var(--muted)}
+.quote-bar button{padding:8px 14px;border-radius:10px;background:var(--accent);color:var(--accent-ink);font-size:14px;white-space:nowrap}
+.quote-bar button[disabled]{opacity:.6}
 </style>
 </head>
 <body>
@@ -225,6 +229,7 @@ function localMode(){
     }
   }catch(e){}
   rebuild();loaded=true;setSync('ok','資料存在這支手機');render();
+  if(S.quotesAt!==todayStr())setTimeout(refreshQuotes,400);
 }
 
 function upsertTx(t,oldDate){
@@ -291,6 +296,46 @@ function catOf(t){
   return list.find(function(c){return c.id===t.cat})||{name:'未分類',color:'#B9A09B'};
 }
 function accName(id){var a=S.meta.accounts.find(function(x){return x.id===id});return a?a.name:'（已刪除帳戶）'}
+
+/* ---------- stock quotes: TWSE (listed) + TPEx (OTC) open data ---------- */
+var Q={busy:false,msg:'',noCode:0};
+var TWSE_URL='https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL';
+var TPEX_URL='https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes';
+function fetchJson(url){
+  return fetch(url,{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('http '+r.status);return r.json()});
+}
+function fetchWithFallback(url){
+  return fetchJson(url).catch(function(){
+    return fetchJson('https://api.allorigins.win/raw?url='+encodeURIComponent(url));
+  });
+}
+function pickPrices(arr,codeKeys,priceKeys,out){
+  if(!Array.isArray(arr))return;
+  arr.forEach(function(r){
+    var c='',p=NaN;
+    codeKeys.forEach(function(k){if(!c&&r[k])c=String(r[k]).trim()});
+    priceKeys.forEach(function(k){if(isNaN(p)&&r[k]!=null)p=parseFloat(String(r[k]).replace(/,/g,''))});
+    if(c&&p>0&&!(c in out))out[c]=p;
+  });
+}
+function refreshQuotes(){
+  if(Q.busy)return;
+  var h=holdings(),codes=h.rows.filter(function(o){return o.code}).map(function(o){return o.code});
+  Q.noCode=h.rows.length-codes.length;
+  if(!codes.length){Q.msg=h.rows.length?'持股都沒有填代號，無法更新。':'還沒有持股。';render();return}
+  Q.busy=true;Q.msg='更新中…';render();
+  var prices={};
+  var p1=fetchWithFallback(TWSE_URL).then(function(j){pickPrices(j,['Code'],['ClosingPrice'],prices)}).catch(function(){});
+  var p2=fetchWithFallback(TPEX_URL).then(function(j){pickPrices(j,['SecuritiesCompanyCode','Code'],['Close','ClosingPrice'],prices)}).catch(function(){});
+  Promise.all([p1,p2]).then(function(){
+    Q.busy=false;
+    if(!Object.keys(prices).length){Q.msg='連不到證交所資料，請稍後再試，或先手動輸入現價。';render();return}
+    var items=clone(S.quotes),n=0,miss=[];
+    codes.forEach(function(c){if(prices[c]){items[c]={price:prices[c],date:todayStr()};n++}else miss.push(c)});
+    Q.msg='已更新 '+n+' 檔最近收盤價'+(miss.length?'；查不到：'+miss.join('、'):'');
+    if(n)put('quotes',{items:items,updatedAt:todayStr()});else render();
+  });
+}
 
 function emptyBox(msg){return '<div class="empty">'+msg+'</div>'}
 function render(){
@@ -398,7 +443,9 @@ function viewInv(){
     '<button data-invtab="log" aria-pressed="'+(UI.invTab==='log')+'">交易紀錄</button></div>';
   if(UI.invTab==='hold'){
     html+='<section class="card"><div class="stats">'+stat('市值',money(h.value),'')+stat('未實現',signed(h.pl),h.pl>0?'pos':h.pl<0?'neg':'')+stat('已實現',signed(h.realized),h.realized>0?'pos':h.realized<0?'neg':'')+'</div></section>';
-    html+='<div class="note">股價請在持股下方點「手動修正」自己更新。</div>';
+    html+='<div class="quote-bar"><span class="txt">股價更新到：'+(S.quotesAt?esc(S.quotesAt.replace(/-/g,'/')):'尚未更新')+'<br>'+esc(Q.msg)+'</span>'+
+      '<button data-refresh="1"'+(Q.busy?' disabled':'')+'>'+(Q.busy?'更新中…':'更新股價')+'</button></div>';
+    if(Q.noCode)html+='<div class="note">有 '+Q.noCode+' 檔持股沒有填代號，無法自動更新。</div>';
     if(!h.rows.length)html+=emptyBox('尚無持倉，按右下角 + 記一筆買入');
     h.rows.sort(function(a,b){return b.value-a.value}).forEach(function(o){
       var pct=o.cost?o.pl/o.cost*100:0,cls=o.pl>0?'pos':o.pl<0?'neg':'';
@@ -406,7 +453,7 @@ function viewInv(){
         '<div style="min-width:0"><span style="font-weight:500">'+esc(o.name)+'</span> <span style="font-size:12px;color:var(--muted)">'+esc(o.code)+(o.kind?' · '+esc(o.kind):'')+'</span><br>'+
         '<span class="num" style="font-size:12px;color:var(--muted);font-weight:600">'+o.qty.toLocaleString('en-US',{maximumFractionDigits:4})+' 股 · 均價 '+money(o.avg,2)+'</span></div>'+
         '<div class="right"><div class="num">'+money(o.value)+'</div><div class="num '+cls+'" style="font-size:13px">'+signed(o.pl)+'（'+(pct>0?'+':'')+pct.toFixed(1)+'%）</div></div></div>'+
-        '<button class="link" style="margin-top:8px;font-size:13px" data-price="'+esc(o.key)+'">現價 '+money(o.price,2)+'（'+o.label+'）· 點此更新股價</button></div>';
+        '<button class="link" style="margin-top:8px;font-size:13px" data-price="'+esc(o.key)+'">現價 '+money(o.price,2)+'（'+o.label+'）· 手動修正</button></div>';
     });
   }else{
     var tr=S.inv.trades.slice().sort(function(a,b){return a.date<b.date?1:a.date>b.date?-1:(a.id<b.id?1:-1)});
@@ -543,7 +590,7 @@ function openTrade(id){
     var h='<div class="head"><h3>'+(ex?'編輯投資交易':'新增投資交易')+'</h3><button class="link" data-x="close">取消</button></div>'+
       '<div class="seg" style="margin-bottom:14px"><button data-side="buy" aria-pressed="'+(f.side==='buy')+'">買入</button><button data-side="sell" aria-pressed="'+(f.side==='sell')+'">賣出</button></div>'+
       '<div class="two"><div class="field"><label for="t-name">名稱</label><input id="t-name" data-f="name" list="t-names" value="'+esc(f.name)+'" placeholder="例：台積電"></div>'+
-      '<div class="field"><label for="t-code">代號（選填）</label><input id="t-code" data-f="code" value="'+esc(f.code)+'" placeholder="例：2330"></div></div>'+
+      '<div class="field"><label for="t-code">代號（要填才能更新股價）</label><input id="t-code" data-f="code" value="'+esc(f.code)+'" placeholder="例：2330"></div></div>'+
       '<datalist id="t-names">'+names.map(function(n){return '<option value="'+esc(n)+'">'}).join('')+'</datalist>'+
       '<div class="two"><div class="field"><label for="t-kind">種類</label><select id="t-kind" data-f="kind">'+KINDS.map(function(k){return '<option'+(k===f.kind?' selected':'')+'>'+k+'</option>'}).join('')+'</select></div>'+
       '<div class="field"><label for="t-date">日期</label><input id="t-date" type="date" data-f="date" value="'+f.date+'"></div></div>'+
@@ -588,9 +635,9 @@ function openTrade(id){
 }
 function openPrice(key){
   var p=S.inv.prices[key];
-  openSheet('<div class="head"><h3>更新現價</h3><button class="link" data-x="close">取消</button></div>'+
+  openSheet('<div class="head"><h3>手動修正現價</h3><button class="link" data-x="close">取消</button></div>'+
     '<div class="field amt"><label for="p-v">'+esc(key)+' 現價</label><input id="p-v" inputmode="decimal" value="'+(p?p.price:'')+'"></div>'+
-    '<div class="hint">輸入最新的價格，市值和損益就會跟著更新。</div>'+
+    '<div class="hint">平常不用填，股價會自動更新。手動填的價格如果比自動更新的新，就會優先使用。</div>'+
     '<button class="btn" data-x="save">儲存</button>'+(p?'<button class="btn danger" data-x="clear">清除手動價格</button>':''));
   var sh=$('#sheet');sh.oninput=sh.onchange=null;
   setTimeout(function(){$('#p-v').focus()},50);
@@ -686,6 +733,7 @@ $('#app').addEventListener('click',function(e){
   else if(d.invtab){UI.invTab=d.invtab;render()}
   else if(d.trade)openTrade(d.trade);
   else if(d.price)openPrice(d.price);
+  else if(d.refresh)refreshQuotes();
 });
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeSheet()});
 

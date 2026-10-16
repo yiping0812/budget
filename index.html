@@ -95,7 +95,7 @@ header.top h1{font-size:19px;margin:0;font-weight:500;letter-spacing:.02em}
 .empty{text-align:center;color:var(--muted);padding:24px 8px;font-size:14px}
 .tabbar{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-top:1px solid var(--line);
   padding:6px 0 calc(6px + env(safe-area-inset-bottom,0px));z-index:20}
-.tabbar .in{max-width:560px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr 1fr}
+.tabbar .in{max-width:560px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr 1fr 1fr}
 .tabbar button{display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px;font-size:12px;color:var(--muted)}
 .tabbar button[aria-current="page"]{color:var(--accent);font-weight:500}
 .tabbar svg{width:22px;height:22px}
@@ -142,6 +142,16 @@ a.link{text-decoration:none}
 .diag{font-size:12px;color:var(--muted);background:var(--chip);border-radius:10px;padding:8px 12px;margin:-4px 0 12px}
 .diag summary{cursor:pointer}
 .diag-row{margin-top:6px;word-break:break-all}
+.wbtns{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.wbtns button{padding:7px 12px;border-radius:8px;background:var(--chip);font-size:13px}
+.wbtns button.main{background:var(--accent);color:var(--accent-ink)}
+.wbar{height:8px;border-radius:4px;background:var(--chip);overflow:hidden;margin:8px 0 6px}
+.wbar i{display:block;height:100%;background:var(--seg1)}
+.wbar.full i{background:var(--income)}
+.wlog{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line);font-size:14px}
+.wlog:first-of-type{border-top:0}
+.wlog .sub{font-size:12px;color:var(--muted)}
+.wlog button{color:var(--gain);font-size:13px}
 </style>
 </head>
 <body>
@@ -163,6 +173,7 @@ a.link{text-decoration:none}
   <button data-tab="home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>總覽</button>
   <button data-tab="tx"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg>收支</button>
   <button data-tab="inv"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>投資</button>
+  <button data-tab="wish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9L12 3z"/></svg>願望</button>
 </div></nav>
 
 <div class="backdrop" id="backdrop"></div>
@@ -195,9 +206,9 @@ function defaultMeta(){
     incCats:inc.map(function(n,i){return {id:'i'+i,name:n,color:PALETTE[(i+2)%PALETTE.length]}})};
 }
 
-var docs={}, S={quotesMeta:{},meta:defaultMeta(),txs:[],inv:{trades:[],prices:{}},quotes:{},quotesAt:'',sheetId:''}, loaded=false;
+var docs={}, S={wishes:[],quotesMeta:{},meta:defaultMeta(),txs:[],inv:{trades:[],prices:{}},quotes:{},quotesAt:'',sheetId:''}, loaded=false;
 var now=new Date();
-var UI={tab:'home',period:'month',y:now.getFullYear(),m:now.getMonth()+1,invTab:'hold'};
+var UI={showDone:false,tab:'home',period:'month',y:now.getFullYear(),m:now.getMonth()+1,invTab:'hold'};
 var store={mode:'pending',col:null,queues:{}};
 
 function rebuild(){
@@ -209,6 +220,7 @@ function rebuild(){
   S.quotesAt=qd.dataDate||qd.updatedAt||'';
   S.quotesMeta={fetchedAt:qd.fetchedAt||'',dataDate:qd.dataDate||'',source:qd.source||'',lastAttempt:qd.lastAttempt||0,lastError:qd.lastError||null};
   S.sheetId=(docs.sheet&&docs.sheet.fileId)||'';
+  S.wishes=(docs.wishes&&docs.wishes.items)||[];
   var all=[];
   Object.keys(docs).forEach(function(k){if(k.indexOf('tx-')===0)all=all.concat(docs[k].items||[])});
   all.sort(function(a,b){return a.date<b.date?1:a.date>b.date?-1:(a.id<b.id?1:-1)});
@@ -262,6 +274,7 @@ function balances(){
   S.inv.trades.forEach(function(r){
     if(r.acc){var g=r.qty*r.price;add(r.acc,r.side==='buy'?-(g+r.fee):(g-r.fee))}
   });
+  S.wishes.forEach(function(w){(w.log||[]).forEach(function(l){if(l.acc)add(l.acc,-l.amt)})});   /* deposit (+) leaves the account, withdrawal (-) returns to it */
   return b;
 }
 function priceFor(key,last){
@@ -448,7 +461,7 @@ function render(){
   });
   var el=$('#app');
   if(!loaded){el.innerHTML=emptyBox('載入中…');return}
-  el.innerHTML=UI.tab==='home'?viewHome():UI.tab==='tx'?viewTx():viewInv();
+  el.innerHTML=UI.tab==='home'?viewHome():UI.tab==='tx'?viewTx():UI.tab==='wish'?viewWish():viewInv();
 }
 function stat(k,v,cls){return '<div class="stat"><div class="k">'+k+'</div><div class="v num '+cls+'">'+v+'</div></div>'}
 
@@ -478,6 +491,8 @@ function viewHome(){
     });
   });
   html+='<button class="btn ghost" data-addacc="1">＋ 新增帳戶</button></section>';
+  var jar=wishPot();
+  if(S.wishes.length)html+='<section class="card"><h2>願望存款（不計入總資產）</h2><button class="list-row" data-tab-go="wish" style="padding:0"><span class="num" style="font-size:22px">'+money(jar)+'</span><span class="link">查看願望</span></button></section>';
   html+='<section class="card"><h2>投資</h2>';
   if(!h.rows.length)html+=emptyBox('尚無持倉，到「投資」記一筆買入');
   else html+='<div class="stats">'+stat('市值',money(h.value),'')+stat('成本',money(h.cost),'')+
@@ -759,6 +774,154 @@ function openPrice(key){
   };
 }
 
+/* ---------- wish list: money moves OUT of an account into a jar (not counted in total assets) ---------- */
+function wishSaved(w){var s=0;(w.log||[]).forEach(function(l){s+=l.amt});return Math.round(s*100)/100}
+function wishPot(){var p=0;S.wishes.forEach(function(w){if(!w.done)p+=wishSaved(w)});return p}
+function wishMonthly(w,remain){
+  if(!w.date||remain<=0)return '';
+  var t=new Date(w.date+'T00:00:00'),n=new Date();
+  if(t<=n)return '已超過目標日期 '+fmtDate(w.date);
+  var months=Math.max(1,Math.ceil((t-n)/(30.44*86400000)));
+  return '目標 '+fmtDate(w.date)+'，每月約存 '+money(Math.ceil(remain/months));
+}
+function saveWishes(list){put('wishes',{items:list})}
+function viewWish(){
+  var act=S.wishes.filter(function(w){return !w.done}),done=S.wishes.filter(function(w){return w.done});
+  var html='<section class="card"><h2>願望存款（不計入總資產）</h2><div class="num" style="font-size:30px">'+money(wishPot())+'</div>'+
+    '<div class="hint" style="margin-bottom:0">存入時會從你選的帳戶扣掉，所以不會和帳戶、總資產重複計算。</div></section>';
+  if(!act.length)html+=emptyBox('還沒有願望，按右下角 + 新增一個');
+  act.forEach(function(w){
+    var saved=wishSaved(w),pct=w.target>0?Math.min(100,saved/w.target*100):0,remain=w.target-saved,full=saved>=w.target;
+    var sub=full?'<span class="inc">已達標，可以買了</span>':'還差 '+money(remain)+(wishMonthly(w,remain)?' · '+wishMonthly(w,remain):'');
+    html+='<div class="card"><div style="display:flex;justify-content:space-between;gap:10px"><span style="font-weight:500">'+esc(w.name)+'</span>'+
+      '<span class="num">'+money(saved)+' <span style="color:var(--muted);font-weight:600">/ '+money(w.target)+'</span></span></div>'+
+      '<div class="wbar'+(full?' full':'')+'"><i style="width:'+pct+'%"></i></div>'+
+      '<div class="sub" style="font-size:12px;color:var(--muted)">'+sub+'</div>'+
+      '<div class="wbtns"><button class="main" data-wishin="'+w.id+'">存入</button>'+
+      '<button data-wishout="'+w.id+'">取出</button>'+
+      '<button data-wishdone="'+w.id+'"'+(full?' class="main"':'')+'>買到了</button>'+
+      '<button data-wishlog="'+w.id+'">紀錄</button><button data-wishedit="'+w.id+'">編輯</button></div></div>';
+  });
+  if(done.length){
+    html+='<button class="btn ghost" data-togdone="1">'+(UI.showDone?'收起':'顯示')+'已完成（'+done.length+'）</button>';
+    if(UI.showDone)done.slice().reverse().forEach(function(w){
+      html+='<div class="card" style="padding:12px 16px"><div style="display:flex;justify-content:space-between;gap:10px"><span>'+esc(w.name)+'</span><span class="num">'+money(w.price||0)+'</span></div>'+
+        '<div class="sub" style="font-size:12px;color:var(--muted)">已購買 '+fmtDate(w.doneDate||'')+'</div></div>';
+    });
+  }
+  return html;
+}
+function numVal(v){return parseFloat(String(v==null?'':v).replace(/,/g,''))}
+function openWish(id){
+  var ex=id?S.wishes.find(function(w){return w.id===id}):null;
+  var f=ex?{name:ex.name,target:ex.target,date:ex.date||''}:{name:'',target:'',date:''};
+  openSheet('<div class="head"><h3>'+(ex?'編輯願望':'新增願望')+'</h3><button class="link" data-x="close">取消</button></div>'+
+    '<div class="field"><label for="w-name">想買什麼</label><input id="w-name" data-f="name" value="'+esc(f.name)+'" placeholder="例：包包"></div>'+
+    '<div class="field amt"><label for="w-target">目標金額</label><input id="w-target" data-f="target" inputmode="decimal" value="'+esc(f.target)+'" placeholder="2000"></div>'+
+    '<div class="field"><label for="w-date">想在什麼時候買到（選填）</label><input id="w-date" type="date" data-f="date" value="'+esc(f.date)+'"></div>'+
+    '<button class="btn" data-x="save">儲存</button>'+(ex?'<button class="btn danger" data-x="del">刪除這個願望</button>':''));
+  var sh=$('#sheet');
+  sh.oninput=sh.onchange=function(e){var k=e.target.dataset&&e.target.dataset.f;if(k)f[k]=e.target.value};
+  sh.onclick=function(e){
+    var b=e.target.closest('button');if(!b)return;var x=b.dataset.x;
+    if(x==='close')closeSheet();
+    else if(x==='del'){
+      if(Math.abs(wishSaved(ex))>0.004){toast('裡面還有存款，請先「取出」或「買到了」');return}
+      saveWishes(S.wishes.filter(function(w){return w.id!==ex.id}));closeSheet();toast('已刪除');
+    }
+    else if(x==='save'){
+      var n=String(f.name).trim(),t=numVal(f.target);
+      if(!n){toast('請輸入想買什麼');return}
+      if(!(t>0)){toast('請輸入目標金額');return}
+      var item=ex?Object.assign({},ex,{name:n,target:t,date:f.date||''}):{id:uid(),name:n,target:t,date:f.date||'',log:[],done:false,created:todayStr()};
+      saveWishes(ex?S.wishes.map(function(w){return w.id===ex.id?item:w}):S.wishes.concat([item]));
+      closeSheet();toast('已儲存');
+    }
+  };
+}
+function openWishMove(id,dir){
+  var w=S.wishes.find(function(x){return x.id===id});if(!w)return;
+  if(!S.meta.accounts.length){toast('請先新增帳戶');return}
+  var saved=wishSaved(w),f={amt:'',acc:S.meta.accounts[0].id,date:todayStr(),note:''},isIn=dir==='in';
+  openSheet('<div class="head"><h3>'+(isIn?'存入':'取出')+'：'+esc(w.name)+'</h3><button class="link" data-x="close">取消</button></div>'+
+    '<div class="field amt"><label for="m-amt">金額</label><input id="m-amt" data-f="amt" inputmode="decimal" placeholder="0"></div>'+
+    '<div class="field"><label for="m-acc">'+(isIn?'從哪個帳戶扣款':'退回哪個帳戶')+'</label><select id="m-acc" data-f="acc">'+accOptions(f.acc,false,false)+'</select></div>'+
+    '<div class="hint">'+(isIn?'這筆錢會從帳戶扣掉，放進這個願望。':'最多可取出 '+money(saved)+'，會加回所選帳戶。')+'</div>'+
+    '<div class="two"><div class="field"><label for="m-date">日期</label><input id="m-date" type="date" data-f="date" value="'+f.date+'"></div>'+
+    '<div class="field"><label for="m-note">備註</label><input id="m-note" data-f="note" placeholder="選填"></div></div>'+
+    '<button class="btn" data-x="save">'+(isIn?'存入':'取出')+'</button>');
+  setTimeout(function(){var i=$('#m-amt');if(i)i.focus()},50);
+  var sh=$('#sheet');
+  sh.oninput=sh.onchange=function(e){var k=e.target.dataset&&e.target.dataset.f;if(k)f[k]=e.target.value};
+  sh.onclick=function(e){
+    var b=e.target.closest('button');if(!b)return;var x=b.dataset.x;
+    if(x==='close')closeSheet();
+    else if(x==='save'){
+      var a=numVal(f.amt);
+      if(!(a>0)){toast('請輸入金額');return}
+      if(!isIn&&a>saved+0.004){toast('取出不能超過已存的 '+money(saved));return}
+      var entry={id:uid(),date:f.date||todayStr(),amt:isIn?a:-a,acc:f.acc,note:String(f.note||'').trim()};
+      saveWishes(S.wishes.map(function(x){return x.id===w.id?Object.assign({},x,{log:(x.log||[]).concat([entry])}):x}));
+      closeSheet();toast(isIn?'已存入':'已取出');
+    }
+  };
+}
+function openWishDone(id){
+  var w=S.wishes.find(function(x){return x.id===id});if(!w)return;
+  if(!S.meta.accounts.length){toast('請先新增帳戶');return}
+  var saved=wishSaved(w);
+  var f={price:w.target,cat:S.meta.expCats[0]?S.meta.expCats[0].id:'',acc:S.meta.accounts[0].id,date:todayStr()};
+  function hint(){
+    var P=numVal(f.price)||0,diff=Math.round((P-saved)*100)/100;
+    return diff>0?'已存的 '+money(saved)+' 先用掉，所選帳戶再扣 '+money(diff):diff<0?'已存的 '+money(saved)+' 用不完，多的 '+money(-diff)+' 退回所選帳戶':'剛好用完存款，帳戶不變';
+  }
+  openSheet('<div class="head"><h3>買到了：'+esc(w.name)+'</h3><button class="link" data-x="close">取消</button></div>'+
+    '<div class="field amt"><label for="d-price">實際花費</label><input id="d-price" data-f="price" inputmode="decimal" value="'+esc(f.price)+'"></div>'+
+    '<div class="field"><label>支出分類</label><div class="chips">'+S.meta.expCats.map(function(c){return '<button class="chip" data-cat="'+c.id+'" aria-pressed="'+(f.cat===c.id)+'"><i class="sw" style="background:'+c.color+'"></i>'+esc(c.name)+'</button>'}).join('')+'</div></div>'+
+    '<div class="field"><label for="d-acc">差額由哪個帳戶處理</label><select id="d-acc" data-f="acc">'+accOptions(f.acc,false,false)+'</select></div>'+
+    '<div class="hint" id="d-hint">'+hint()+'</div>'+
+    '<div class="field"><label for="d-date">購買日期</label><input id="d-date" type="date" data-f="date" value="'+f.date+'"></div>'+
+    '<button class="btn" data-x="save">確認，記成一筆支出</button>');
+  var sh=$('#sheet');
+  sh.oninput=sh.onchange=function(e){var k=e.target.dataset&&e.target.dataset.f;if(!k)return;f[k]=e.target.value;var h=$('#d-hint');if(h)h.textContent=hint()};
+  sh.onclick=function(e){
+    var b=e.target.closest('button');if(!b)return;
+    if(b.dataset.cat){f.cat=b.dataset.cat;sh.querySelectorAll('[data-cat]').forEach(function(x){x.setAttribute('aria-pressed',x===b)});return}
+    var x=b.dataset.x;
+    if(x==='close')closeSheet();
+    else if(x==='save'){
+      var P=numVal(f.price);
+      if(!(P>0)){toast('請輸入實際花費');return}
+      var date=f.date||todayStr(),log=(w.log||[]).slice();
+      if(Math.abs(saved)>0.004)log.push({id:uid(),date:date,amt:-saved,acc:f.acc,note:'完成購買，存款退回'});
+      upsertTx({id:uid(),type:'expense',date:date,acc:f.acc,amt:P,cat:f.cat,note:'願望：'+w.name});
+      saveWishes(S.wishes.map(function(x){return x.id===w.id?Object.assign({},x,{log:log,done:true,doneDate:date,price:P}):x}));
+      closeSheet();toast('已記成支出，願望完成');
+    }
+  };
+}
+function openWishLog(id){
+  var w=S.wishes.find(function(x){return x.id===id});if(!w)return;
+  var log=(w.log||[]).slice().sort(function(a,b){return a.date<b.date?1:a.date>b.date?-1:(a.id<b.id?1:-1)});
+  openSheet('<div class="head"><h3>紀錄：'+esc(w.name)+'</h3><button class="link" data-x="close">完成</button></div>'+
+    (log.length?log.map(function(l){
+      return '<div class="wlog"><span><span>'+(l.amt>0?'存入':'取出')+' <span class="num '+(l.amt>0?'inc':'')+'">'+money(Math.abs(l.amt))+'</span></span><br><span class="sub">'+fmtDate(l.date)+' · '+esc(accName(l.acc))+(l.note?' · '+esc(l.note):'')+'</span></span>'+
+        (w.done?'':'<button data-del="'+l.id+'">刪除</button>')+'</div>';
+    }).join(''):'<div class="empty">還沒有紀錄</div>'));
+  var sh=$('#sheet');sh.oninput=sh.onchange=null;
+  sh.onclick=function(e){
+    var b=e.target.closest('button');if(!b)return;
+    if(b.dataset.x==='close'){closeSheet();return}
+    if(b.dataset.del){
+      var rest=(w.log||[]).filter(function(l){return l.id!==b.dataset.del});
+      var sum=0;rest.forEach(function(l){sum+=l.amt});
+      if(sum<-0.004){toast('刪掉這筆會讓存款變成負數');return}
+      saveWishes(S.wishes.map(function(x){return x.id===w.id?Object.assign({},x,{log:rest}):x}));
+      closeSheet();toast('已刪除，帳戶餘額已還原');
+    }
+  };
+}
+
 function csvCell(v){v=String(v==null?'':v);return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v}
 function saveFile(name,data){
   try{
@@ -798,7 +961,7 @@ function openSettings(){
           if(!data||data.app!=='budget-v1')throw 0;
           if(!confirm('匯入會覆蓋目前所有資料，確定嗎？'))return;
           Object.keys(docs).filter(function(k){return k.indexOf('tx-')===0}).forEach(function(k){put(k,{items:[]})});
-          put('meta',data.meta);put('inv',data.inv);
+          put('meta',data.meta);put('inv',data.inv);put('wishes',data.wishes||{items:[]});
           Object.keys(data.tx||{}).forEach(function(k){put(k,data.tx[k])});
           toast('已匯入');draw();
         }catch(err){toast('檔案格式不正確')}
@@ -819,13 +982,13 @@ function openSettings(){
       saveFile('收支紀錄.csv','\ufeff'+rows.map(function(r){return r.map(csvCell).join(',')}).join('\n'));return}
     if(d.x==='json'){
       var tx={};Object.keys(docs).forEach(function(k){if(k.indexOf('tx-')===0)tx[k]=docs[k]});
-      saveFile('記帳備份-'+todayStr()+'.json',JSON.stringify({app:'budget-v1',meta:S.meta,inv:S.inv,tx:tx}));return}
+      saveFile('記帳備份-'+todayStr()+'.json',JSON.stringify({app:'budget-v1',meta:S.meta,inv:S.inv,wishes:{items:S.wishes},tx:tx}));return}
   };
 }
 
 $('#backdrop').addEventListener('click',closeSheet);
 $('#btnSettings').addEventListener('click',openSettings);
-$('#fab').addEventListener('click',function(){UI.tab==='inv'?openTrade():openTx()});
+$('#fab').addEventListener('click',function(){UI.tab==='inv'?openTrade():UI.tab==='wish'?openWish():openTx()});
 $('#tabs').addEventListener('click',function(e){var b=e.target.closest('button');if(b){UI.tab=b.dataset.tab;render();window.scrollTo(0,0)}});
 $('#app').addEventListener('click',function(e){
   var b=e.target.closest('button');if(!b)return;var d=b.dataset;
@@ -839,10 +1002,17 @@ $('#app').addEventListener('click',function(e){
   else if(d.edit)openTx(d.edit);
   else if(d.acc)openAccount(d.acc);
   else if(d.addacc)openAccount(null);
+  else if(d.tabGo){UI.tab=d.tabGo;render();window.scrollTo(0,0)}
   else if(d.invtab){UI.invTab=d.invtab;render()}
   else if(d.trade)openTrade(d.trade);
   else if(d.price)openPrice(d.price);
   else if(d.refresh)refreshQuotes();
+  else if(d.wishin)openWishMove(d.wishin,'in');
+  else if(d.wishout)openWishMove(d.wishout,'out');
+  else if(d.wishdone)openWishDone(d.wishdone);
+  else if(d.wishedit)openWish(d.wishedit);
+  else if(d.wishlog)openWishLog(d.wishlog);
+  else if(d.togdone){UI.showDone=!UI.showDone;render()}
 });
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeSheet()});
 

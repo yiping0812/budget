@@ -394,7 +394,11 @@ function quoteSources(){
   s.push({id:'twse-direct',url:TWSE_URL,kind:'twse'});
   return s;
 }
-function heldCodes(){return holdings().rows.filter(function(o){return o.code}).map(function(o){return o.code})}
+function autoRows(){return holdings().rows.filter(function(o){return o.kind!=='基金'&&o.kind!=='加密貨幣'})}
+function heldCodes(){return autoRows().filter(function(o){return o.code}).map(function(o){return o.code})}
+function manualOnlyCount(){return holdings().rows.length-autoRows().length}
+/* the date shown to the user = newest price date among the stocks they actually hold (never the file-wide max) */
+function heldDataDate(){var m='';heldCodes().forEach(function(c){var q=S.quotes[c];if(q&&q.date>m)m=q.date});return m}
 function needAutoRefresh(){
   if(!heldCodes().length)return false;
   var m=S.quotesMeta||{},now=new Date();
@@ -402,7 +406,7 @@ function needAutoRefresh(){
   if(!m.fetchedAt)return true;
   var f=new Date(m.fetchedAt);
   if(f.toDateString()!==now.toDateString())return true;                 /* new day */
-  if(m.dataDate===todayStr())return false;                              /* already have today's close */
+  if(heldDataDate()===todayStr())return false;                              /* already have today's close */
   return f.getHours()<15&&now.getHours()>=15;                           /* fetched before close, now after close */
 }
 function fmtDate(iso){return iso?iso.replace(/-/g,'/'):''}
@@ -413,7 +417,7 @@ function fmtStamp(iso){
 function refreshQuotes(){
   if(Q.busy)return;
   var held=heldCodes();
-  Q.noCode=holdings().rows.length-held.length;
+  Q.noCode=autoRows().length-held.length;
   if(!held.length){Q.ok=false;Q.msg=Q.noCode?'持股都沒有填代號，無法更新。':'還沒有持股。';render();return}
   Q.busy=true;Q.ok=null;Q.msg='更新中…';Q.diag=[];render();
   var list=quoteSources(),i=0,errs=[];
@@ -434,11 +438,12 @@ function refreshQuotes(){
       if(old&&old.date>q.date){older.push(c);return}                    /* never go backwards in time */
       items[c]={price:q.price,date:q.date,name:q.name};n++;
     });
-    var base=docs.quotes||{};
+    var base=docs.quotes||{},hd='';
+    held.forEach(function(c){if(items[c]&&items[c].date>hd)hd=items[c].date});
     Q.busy=false;Q.ok=n>0;
-    Q.msg=(n?'已更新 '+n+' 檔，資料日期 '+fmtDate(r.dataDate)+'（來源：'+r.src+'）':'沒有任何持股在資料中找到')+
+    Q.msg=(n?'已更新 '+n+' 檔，資料日期 '+fmtDate(hd)+'（來源：'+r.src+'）':'沒有任何持股在資料中找到')+
       (miss.length?'；查不到：'+miss.join('、')+'，維持舊價格':'')+(older.length?'；來源資料較舊，略過：'+older.join('、'):'');
-    put('quotes',{items:items,updatedAt:n?r.dataDate:(base.updatedAt||''),dataDate:n?r.dataDate:(base.dataDate||''),
+    put('quotes',{items:items,updatedAt:n?hd:(base.updatedAt||''),dataDate:n?hd:(base.dataDate||''),
       fetchedAt:n?new Date().toISOString():(base.fetchedAt||''),source:n?r.src:(base.source||''),lastAttempt:Date.now(),lastError:n?null:{at:new Date().toISOString(),msg:Q.msg}});
   },function(e){
     var base=docs.quotes||{};
@@ -562,13 +567,14 @@ function viewInv(){
     '<button data-invtab="log" aria-pressed="'+(UI.invTab==='log')+'">交易紀錄</button></div>';
   if(UI.invTab==='hold'){
     html+='<section class="card"><div class="stats">'+stat('市值',money(h.value),'')+stat('未實現',signed(h.pl),h.pl>0?'pos':h.pl<0?'neg':'')+stat('已實現',signed(h.realized),h.realized>0?'pos':h.realized<0?'neg':'')+'</div></section>';
-    var qm=S.quotesMeta||{},stamp=fmtStamp(qm.fetchedAt),stale=qm.dataDate&&qm.dataDate<isoShift(-4);
+    var qm=S.quotesMeta||{},stamp=fmtStamp(qm.fetchedAt),hdd=heldDataDate(),stale=hdd&&hdd<isoShift(-4);
     var status=Q.msg||(qm.lastError?qm.lastError.msg:'');
     var bad=Q.ok===false||(!Q.msg&&qm.lastError);
-    html+='<div class="quote-bar"><span class="txt">資料日期：'+(qm.dataDate?esc(fmtDate(qm.dataDate)):'尚未取得')+(stale?'（可能過舊）':'')+
+    html+='<div class="quote-bar"><span class="txt">資料日期：'+(hdd?esc(fmtDate(hdd)):'尚未取得')+(stale?'（可能過舊）':'')+
       '<br>最後成功更新：'+(stamp?esc(stamp):'從未成功')+
       (status?'<br><span class="'+(bad?'bad':'')+'">'+esc(status)+'</span>':'')+'</span>'+
       '<button data-refresh="1"'+(Q.busy?' disabled':'')+'>'+(Q.busy?'更新中…':'更新股價')+'</button></div>'+diagHtml();
+    if(manualOnlyCount())html+='<div class="note">基金（共 '+manualOnlyCount()+' 檔）目前需要手動更新淨值：點該檔下方的「手動修正」。</div>';
     if(Q.noCode)html+='<div class="note">有 '+Q.noCode+' 檔持股沒有填代號，無法自動更新。</div>';
     if(!h.rows.length)html+=emptyBox('尚無持倉，按右下角 + 記一筆買入');
     h.rows.sort(function(a,b){return b.value-a.value}).forEach(function(o){

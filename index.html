@@ -9,6 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="小帳本">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="theme-color" content="#FAF6F7">
+<script>try{var __t=localStorage.getItem("budget.theme");if(__t&&__t!=="auto")document.documentElement.setAttribute("data-theme",__t)}catch(e){}</script>
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="icon" href="icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -40,6 +41,17 @@
   --income:#6FD3C4; --gain:#FF7A80; --loss:#5FD6A6; --seg1:#E58AA9; --seg2:#7FC4B3;
   color-scheme:dark;
 }
+:root[data-theme="cream"]{--bg:#F7F2E9;--surface:#FFFDF8;--ink:#33291F;--muted:#6B5E50;--line:#E9E0D0;--accent:#A8572F;--accent-ink:#FFFFFF;--chip:#EFE7D8;--income:#27775A;--gain:#C8453A;--loss:#25825C;--seg1:#D08F5E;--seg2:#8DB59A;color-scheme:light}
+:root[data-theme="mist"]{--bg:#F1F4F8;--surface:#FFFFFF;--ink:#1F2A37;--muted:#5E6B7D;--line:#E1E7EF;--accent:#3A68A6;--accent-ink:#FFFFFF;--chip:#E6ECF4;--income:#1D7A6D;--gain:#D13F45;--loss:#238A66;--seg1:#7FA6D6;--seg2:#8CCBBE;color-scheme:light}
+:root[data-theme="mint"]{--bg:#F0F7F3;--surface:#FFFFFF;--ink:#1E2B25;--muted:#587064;--line:#DCEBE2;--accent:#2A7658;--accent-ink:#FFFFFF;--chip:#E3F0E8;--income:#2A7658;--gain:#D13F45;--loss:#238A66;--seg1:#7CC4A4;--seg2:#E3B776;color-scheme:light}
+:root[data-theme="lavender"]{--bg:#F5F2FA;--surface:#FFFFFF;--ink:#2B2536;--muted:#6A617E;--line:#E6E0F0;--accent:#7152AE;--accent-ink:#FFFFFF;--chip:#ECE6F6;--income:#1D7A6D;--gain:#D13F45;--loss:#238A66;--seg1:#A992D6;--seg2:#8CCBBE;color-scheme:light}
+:root[data-theme="graphite"]{--bg:#121212;--surface:#1E1E1E;--ink:#EDEDED;--muted:#A8A8A8;--line:#2E2E2E;--accent:#8AB4F8;--accent-ink:#0B1B33;--chip:#2A2A2A;--income:#6FD3C4;--gain:#FF7A80;--loss:#5FD6A6;--seg1:#8AB4F8;--seg2:#7FD1C1;color-scheme:dark}
+.themes{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.tbtn{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;background:var(--surface);border:2px solid var(--line);font-size:14px;text-align:left}
+.tbtn[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
+.tsw{position:relative;width:46px;height:34px;border-radius:9px;border:1px solid var(--line);overflow:hidden;display:block;flex:0 0 46px}
+.tsw i{position:absolute;left:6px;right:6px;top:6px;height:9px;border-radius:3px}
+.tsw b{position:absolute;left:6px;bottom:6px;width:14px;height:9px;border-radius:3px}
 html{scroll-padding-top:env(safe-area-inset-top,0px)}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{margin:0;background:var(--bg);color:var(--ink);
@@ -101,7 +113,7 @@ header.top h1{font-size:19px;margin:0;font-weight:500;letter-spacing:.02em}
 .tabbar svg{width:22px;height:22px}
 .fab{position:fixed;right:18px;bottom:calc(76px + env(safe-area-inset-bottom,0px));width:54px;height:54px;border-radius:16px;
   background:var(--accent);color:var(--accent-ink);font-size:30px;line-height:1;display:grid;place-items:center;
-  box-shadow:0 6px 16px rgba(0,0,0,.18);z-index:21}
+  box-shadow:0 6px 16px rgba(0,0,0,.22);z-index:21}
 @media (min-width:600px){.fab{right:calc(50% - 280px + 18px)}}
 .backdrop{position:fixed;inset:0;background:rgba(30,20,26,.4);z-index:40;display:none}
 .backdrop.open{display:block}
@@ -928,6 +940,32 @@ function openWishLog(id){
   };
 }
 
+/* ---------- themes ---------- */
+var THEMES=[
+  {k:'auto',n:'自動（跟隨手機）',bg:'linear-gradient(135deg,#FAF6F7 50%,#161214 50%)',sf:'linear-gradient(135deg,#FFFFFF 50%,#211B1E 50%)',ac:'#B94A74'},
+  {k:'light',n:'粉霧',bg:'#FAF6F7',sf:'#FFFFFF',ac:'#B94A74'},
+  {k:'dark',n:'深夜紫',bg:'#161214',sf:'#211B1E',ac:'#E58AA9'},
+  {k:'cream',n:'奶油米',bg:'#F7F2E9',sf:'#FFFDF8',ac:'#A8572F'},
+  {k:'mist',n:'霧藍',bg:'#F1F4F8',sf:'#FFFFFF',ac:'#3A68A6'},
+  {k:'mint',n:'薄荷',bg:'#F0F7F3',sf:'#FFFFFF',ac:'#2A7658'},
+  {k:'lavender',n:'薰衣草',bg:'#F5F2FA',sf:'#FFFFFF',ac:'#7152AE'},
+  {k:'graphite',n:'石墨',bg:'#121212',sf:'#1E1E1E',ac:'#8AB4F8'}
+];
+function curTheme(){try{return localStorage.getItem('budget.theme')||'auto'}catch(e){return 'auto'}}
+function applyTheme(k){
+  var r=document.documentElement;
+  if(k==='auto')r.removeAttribute('data-theme');else r.setAttribute('data-theme',k);
+  try{localStorage.setItem('budget.theme',k)}catch(e){}
+  var mt=document.querySelector('meta[name=theme-color]');
+  if(mt){var bg=getComputedStyle(r).getPropertyValue('--bg').trim();if(bg)mt.setAttribute('content',bg)}
+}
+function themeBlock(){
+  var cur=curTheme();
+  return '<div class="card" style="background:var(--bg)"><h2>主題顏色</h2><div class="themes">'+THEMES.map(function(t){
+    return '<button class="tbtn" data-theme-btn="'+t.k+'" aria-pressed="'+(t.k===cur)+'"><span class="tsw" style="background:'+t.bg+'"><i style="background:'+t.sf+'"></i><b style="background:'+t.ac+'"></b></span>'+t.n+'</button>';
+  }).join('')+'</div></div>';
+}
+
 function csvCell(v){v=String(v==null?'':v);return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v}
 function saveFile(name,data){
   try{
@@ -943,7 +981,7 @@ function openSettings(){
       '<button class="btn ghost" data-addcat="'+key+'">＋ 新增分類</button></div>';
   }
   function draw(){
-    openSheet('<div class="head"><h3>設定</h3><button class="link" data-x="close">完成</button></div>'+
+    openSheet('<div class="head"><h3>設定</h3><button class="link" data-x="close">完成</button></div>'+themeBlock()+
       '<div class="card" style="background:var(--bg)"><h2>帳戶（點一下編輯）</h2>'+
       S.meta.accounts.map(function(a){return '<button class="list-row" data-acc="'+a.id+'"><span>'+esc(a.name)+' <span class="sub">'+akind(a.kind).n+'</span></span><span class="link">編輯</span></button>'}).join('')+
       '<button class="btn ghost" data-addacc="1">＋ 新增帳戶</button></div>'+
@@ -978,6 +1016,7 @@ function openSettings(){
   sh.onclick=function(e){
     var b=e.target.closest('button');if(!b)return;var d=b.dataset;
     if(d.x==='close'){closeSheet();return}
+    if(d.themeBtn){applyTheme(d.themeBtn);sh.querySelectorAll('[data-theme-btn]').forEach(function(x){x.setAttribute('aria-pressed',x===b)});return}
     if(d.acc){openAccount(d.acc,function(){openSettings()});return}
     if(d.addacc){openAccount(null,function(){openSettings()});return}
     if(d.addcat){var arr=S.meta[d.addcat];arr.push({id:'c'+uid(),name:'新分類',color:PALETTE[arr.length%PALETTE.length]});saveMeta();draw();return}
@@ -1022,6 +1061,7 @@ $('#app').addEventListener('click',function(e){
 });
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeSheet()});
 
+applyTheme(curTheme());
 render();
 initStore();
 })();
